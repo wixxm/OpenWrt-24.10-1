@@ -1,0 +1,101 @@
+name: Sync OpenWrt 24.10 to Main
+
+permissions:
+  contents: write  # 允许写入内容
+
+on:
+  push:
+    paths:
+      - '.github/workflows/main.yml'
+  schedule:
+    - cron: 0 */12 * * *  # 每12小时运行一次
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 克隆 OpenWrt 官方仓库的 24.10 分支并包含 .git 信息
+      - name: Clone OpenWrt Repository
+        run: |
+          git clone --branch openwrt-24.10 https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # 2. 克隆目标仓库（您的仓库）
+      - name: Clone Your Repository
+        env:
+          PAT: ${{ secrets.PAT_TOKEN }}
+        run: |
+          git clone https://x-access-token:${PAT}@github.com/wixxm/openwrt-24.10-1.git target_repo
+
+      # 3. 检查并初始化目标仓库分支
+      - name: Ensure Target Repo Branch
+        run: |
+          cd target_repo
+          if ! git rev-parse --verify main >/dev/null 2>&1; then
+            git checkout -b main
+          fi
+
+      # 4. 备份 .github 文件夹和需要保留的文件
+      - name: Backup Existing Files
+        run: |
+          mkdir -p backup
+          # 备份 .github 文件夹
+          if [ -d "target_repo/.github" ]; then
+            mv target_repo/.github backup/github_backup
+          fi
+          
+
+      # 5. 将 OpenWrt 仓库的内容同步到目标仓库（包含 .git 信息）
+      - name: Sync OpenWrt Changes and .git Info
+        run: |
+          # 同步源码内容
+          rsync -av --delete --exclude='.github' openwrt/ target_repo/
+          # 同步 .git 信息
+          rsync -av --delete openwrt/.git/ target_repo/.git/
+
+      # 6. 更新远程仓库 URL 并检查/切换分支
+      - name: Update Remote URL and Checkout Branch
+        run: |
+          cd target_repo
+          # 更新远程仓库 URL
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/wixxm/openwrt-24.10-1.git
+
+          # 检查并切换到 main 分支，如果不存在则创建它
+          if ! git rev-parse --verify main >/dev/null 2>&1; then
+            git checkout -b main
+          else
+            git checkout main
+          fi
+
+      # 7. 恢复备份的文件和文件夹
+      - name: Restore Backup Files
+        run: |
+          # 恢复 .github 文件夹
+          if [ -d "backup/github_backup" ]; then
+            mv backup/github_backup target_repo/.github
+          fi
+          
+
+      # 8. 提交并推送更改
+      - name: Commit and Push Changes
+        env:
+          PAT: ${{ secrets.PAT_TOKEN }}
+        run: |
+          cd target_repo
+          # 配置 Git 用户信息
+          git config user.name "wixxm"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 拉取远程分支并合并
+          git fetch origin main || true
+          git merge --no-edit origin/main || true
+
+          # 提交更改
+          git add .
+          git commit -m "🏅 Sync OpenWrt 24.10 with .git information" || echo "没有新的更改可提交"
+
+          # 推送更新到远程仓库
+          git push origin main || (echo "强制推送中..." && git push origin main --force)
